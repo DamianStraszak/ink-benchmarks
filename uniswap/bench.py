@@ -50,6 +50,11 @@ def test_call(name, instance, method, args, keypair):
     print(f"{name:20} {method:10} dry_run: {ref_time_frac:8.5f}   fee: {fee_paid_azero:8.5f}")
 
 
+def read_call(name, instance, method, args, keypair):
+    res = instance.read(keypair = keypair,method = method, args=args).value
+    return res['result']['Ok']['data']['Ok']
+
+
 
 
 def bench_uniswap(dir_name, contract_name):
@@ -66,12 +71,80 @@ def bench_uniswap(dir_name, contract_name):
 
 
 
+def print_balances(token_dir_name, tokens, dummy):
+    for num in range(3):
+        balance_alice = read_call(token_dir_name, tokens[num], "PSP22::balance_of", {"owner": dummy.ss58_address}, dummy)
+        print(f"Balance of Alice in token {num} = {balance_alice}")
 
+def instantiate_tokens(chain, token_dir_name):
+    return [instantiate_contract(chain, token_dir_name, "contract", "new", args={"total_supply": 10*1000000, "name": f"token-{num}", "symbol": f"token-{num}", "decimals": 6}) for num in range(3)]
+
+
+
+
+def bench_uniswap_multipool():
+    
+    dex_dir_name = "uniswap-multipool"
+    contract_name = "contract"
+    token_dir_name = "mintable-psp22"
+
+    print(f"Compiling {dex_dir_name}")
+    compile_contract(dex_dir_name, contract_name)
+    print(f"Compiling {token_dir_name}")
+    compile_contract(token_dir_name, contract_name)
+    mil = 1000000
+    chain = SubstrateInterface(
+        url=WS_ENDPOINT
+    )
+    dummy = Keypair.create_from_uri('//Alice')
+    dex_instance = instantiate_contract(chain, dex_dir_name, contract_name, "new", args={})
+    tokens = instantiate_tokens(chain, token_dir_name)
+    token_addresses = [token.contract_address for token in tokens]
+    # {token_0: AccountId, balance_0: u128,  token_1: AccountId, balance_1:u128, fee: u32}
+    for token in tokens:
+        test_call(token_dir_name, token, "PSP22::approve", {"spender": dex_instance.contract_address, "value": 100*mil}, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+
+    print("Testing PSP22::transfer")
+
+    test_call(token_dir_name, tokens[0], "PSP22::transfer", {"to": Keypair.create_from_uri('//Bob').ss58_address, "value": 1*mil, "_data": []}, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+
+    new_pool_args = {"token_0": token_addresses[0], "balance_0": 5*mil, "token_1": token_addresses[1], "balance_1": 5*mil, "fee": 30}
+    test_call(dex_dir_name, dex_instance, "new_pool", new_pool_args, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+
+    new_pool_args = {"token_0": token_addresses[1], "balance_0": 5*mil, "token_1": token_addresses[2], "balance_1": 5*mil, "fee": 30}
+    test_call(dex_dir_name, dex_instance, "new_pool", new_pool_args, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+
+    # swap(&mut self, token_in: AccountId, token_out: AccountId, amount_in: u128, min_amount_out: u128, pools: Vec<u32>) 
+    print("Swapping token 0 for token 1")
+    swap_args = {"token_in": token_addresses[0], "token_out": token_addresses[1], "amount_in": mil, "min_amount_out": 0, "pools": [0]}
+    test_call(dex_dir_name, dex_instance, "swap", swap_args, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+
+    # swap(&mut self, token_in: AccountId, token_out: AccountId, amount_in: u128, min_amount_out: u128, pools: Vec<u32>) 
+    print("Swapping token 0 for token 1 for token 2")
+    swap_args = {"token_in": token_addresses[0], "token_out": token_addresses[2], "amount_in": mil, "min_amount_out": 0, "pools": [0, 1]}
+    test_call(dex_dir_name, dex_instance, "swap", swap_args, dummy)
+
+    print_balances(token_dir_name, tokens, dummy)
+    
 
 
 if __name__ == "__main__":
+    print("Basic uniswap without u256")
     bench_uniswap("uniswap-internal", "contract")
+    print("\n\n\nBasic uniswap with u256")
     bench_uniswap("uniswap-internal-u256", "contract")
+    print("\n\n\nMultipool uniswap")
+    bench_uniswap_multipool()
 
 
     
